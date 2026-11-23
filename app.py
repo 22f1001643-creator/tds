@@ -33,7 +33,13 @@ class Result(BaseModel):
     confidence: float
 
 
-INJECTION = re.compile(r"ignore (all |any )?(previous|prior|system)|reveal (the )?(system|prompt)|disregard .*instructions", re.I)
+INJECTION = re.compile(
+    r"\b(?:ignore|disregard|forget|override|bypass|circumvent|do not follow|don't follow)\b"
+    r".{0,120}\b(?:instructions?|rules?|prompt|system|developer|previous|prior|above)\b"
+    r"|\b(?:reveal|show|print|repeat|expose|dump)\b.{0,100}\b(?:system prompt|hidden instructions|developer message|secret|credentials|api key)\b"
+    r"|\b(?:act as|pretend to be|you are now)\b.{0,100}\b(?:system|developer|admin|unrestricted)\b",
+    re.I,
+)
 MULTI_PART = re.compile(r"\b(compare|contrast|both|difference|versus|\bvs\b|relationship|across|combine|synthesi[sz]e|while|whereas)\b", re.I)
 
 STOP_WORDS = {
@@ -70,7 +76,7 @@ def root():
 def query(body: Query):
     question = body.question.strip()
     # Treat instruction-like clauses as untrusted query text, preserving factual clauses.
-    clauses = re.split(r"(?<=[.!?;])\s+|\n+", question)
+    clauses = re.split(r"(?<=[.!?;,:])\s*|\n+", question)
     clean_question = " ".join(part for part in clauses if part.strip() and not INJECTION.search(part)).strip()
     if not clean_question or INJECTION.search(question) and len(TOKEN_RE.findall(clean_question)) < 3:
         return Result(answer=None, sources=[], scores=[], confidence=0.1)
