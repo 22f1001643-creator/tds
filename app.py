@@ -34,9 +34,7 @@ class Result(BaseModel):
 
 
 INJECTION = re.compile(r"ignore (all |any )?(previous|prior|system)|reveal (the )?(system|prompt)|disregard .*instructions", re.I)
-INJECTION_PREFIX = re.compile(
-    r"^\s*(?:ignore|disregard|forget)\b[^.;!?]*(?:[.;!?]+\s*|$)", re.I
-)
+MULTI_PART = re.compile(r"\b(compare|contrast|both|difference|versus|\bvs\b|relationship|across|combine|synthesi[sz]e|while|whereas)\b", re.I)
 
 STOP_WORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "does",
@@ -71,14 +69,9 @@ def root():
 @app.post("/query", response_model=Result)
 def query(body: Query):
     question = body.question.strip()
-    # Strip a leading instruction override, keeping any factual question after it.
-    # If the input contains only an override, abstain rather than retrieving on it.
-    clean_question = question
-    for _ in range(3):
-        cleaned = INJECTION_PREFIX.sub("", clean_question, count=1).strip()
-        if cleaned == clean_question:
-            break
-        clean_question = cleaned
+    # Treat instruction-like clauses as untrusted query text, preserving factual clauses.
+    clauses = re.split(r"(?<=[.!?;])\s+|\n+", question)
+    clean_question = " ".join(part for part in clauses if part.strip() and not INJECTION.search(part)).strip()
     if not clean_question or INJECTION.search(question) and len(TOKEN_RE.findall(clean_question)) < 3:
         return Result(answer=None, sources=[], scores=[], confidence=0.1)
 
@@ -101,9 +94,15 @@ def query(body: Query):
     # Require a clear semantic match and a margin over unrelated passages.
     if best < 0.36 or (best < 0.46 and lexical[order[0]] < 0.035):
         return Result(answer=None, sources=[], scores=[], confidence=round(min(0.39, max(0.05, best)), 4))
-    ids = [int(i) for i in order]
+    # Single-fact questions usually need only the best passage. For explicit comparisons
+    # and synthesis, retain other close, lexically supported passages.
+    if MULTI_PART.search(clean_question):
+        ids = [int(i) for i in order if raw[i] >= best - 0.13 and (i == order[0] or lexical[i] >= 0.06)]
+        ids = ids[:body.top_k] or [int(order[0])]
+    else:
+        ids = [int(order[0])]
     scores = [round(float(np.clip(raw[i], 0.0, 1.0)), 4) for i in ids]
     # Return cited source text as a faithful factual answer; passages are untrusted data.
-    answer = PASSAGES[ids[0]]
+    answer = " ".join(PASSAGES[i] for i in ids)
     confidence = float(np.clip(0.61 + (best - 0.40) * 0.8, 0.61, 0.98))
     return Result(answer=answer, sources=ids, scores=scores, confidence=round(confidence, 4))
